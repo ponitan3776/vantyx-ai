@@ -2,374 +2,655 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>AI ゲーム工房 - 初心者向けローカルAIスタジオ</title>
+  <title>vantyx</title>
+  <!-- Monaco Editor -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/editor/editor.main.min.css">
+  <!-- JSZip -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     :root {
-      --bg-base: #090d16;
-      --bg-panel: #111827;
-      --bg-card: #1f2937;
-      --accent: #38bdf8;
-      --accent-glow: rgba(56, 189, 248, 0.3);
-      --text-main: #f8fafc;
-      --text-sub: #94a3b8;
-      --border: #334155;
+      --bg-base: #1e1e1e;
+      --bg-panel: #252526;
+      --bg-card: #2d2d2d;
+      --accent: #007acc;
+      --text-main: #d4d4d4;
+      --border: #3c3c3c;
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0; font-family: system-ui, -apple-system, sans-serif;
-      background: var(--bg-base); color: var(--text-main);
-      display: flex; height: 100vh; overflow: hidden;
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-base); color: var(--text-main); display: flex; flex-direction: column; height: 100vh; overflow: hidden;
     }
 
-    /* 🌟 リッチなロード画面（オーバーレイ） */
-    #loading-overlay {
-      position: fixed; inset: 0; background: rgba(9, 13, 22, 0.95);
-      backdrop-filter: blur(10px); z-index: 9999; display: flex;
-      flex-direction: column; align-items: center; justify-content: center;
-      transition: opacity 0.5s ease;
+    header {
+      background: var(--bg-panel); padding: 0 16px; display: flex; justify-content: space-between;
+      align-items: center; border-bottom: 1px solid var(--border); height: 48px; gap: 12px;
     }
-    .loader-card {
-      background: var(--bg-panel); border: 1px solid var(--border);
-      padding: 40px; border-radius: 20px; text-align: center; width: 400px;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.6);
-    }
-    .spinner {
-      width: 50px; height: 50px; border: 4px solid var(--border);
-      border-top-color: var(--accent); border-radius: 50%;
-      animation: spin 1s linear infinite; margin: 0 auto 20px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .progress-bar-container {
-      width: 100%; background: var(--bg-card); height: 8px; border-radius: 4px;
-      overflow: hidden; margin-top: 15px; border: 1px solid var(--border);
-    }
-    .progress-bar {
-      width: 0%; height: 100%; background: linear-gradient(90deg, #38bdf8, #818cf8);
-      transition: width 0.3s ease;
-    }
-    #load-status { font-size: 0.85rem; color: var(--text-sub); margin-top: 10px; line-height: 1.4; }
-
-    /* 左側：チャットパネル */
-    .chat-panel {
-      width: 450px; background: var(--bg-panel); border-right: 1px solid var(--border);
-      display: flex; flex-direction: column; box-shadow: 10px 0 30px rgba(0,0,0,0.4);
-    }
-    .chat-header {
-      padding: 16px 20px; background: var(--bg-base); border-bottom: 1px solid var(--border);
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    .chat-header h1 { margin: 0; font-size: 1.1rem; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand h1 { margin: 0; font-size: 1rem; color: #4fc1ff; white-space: nowrap; }
     
-    #chat-box {
-      flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px;
+    .header-controls { display: flex; align-items: center; gap: 10px; }
+    select.model-select {
+      background: #333; color: #fff; border: 1px solid #555; padding: 4px 8px; border-radius: 4px; font-size: 0.78rem;
     }
-    .msg {
-      padding: 14px 18px; border-radius: 14px; font-size: 0.92rem; line-height: 1.6;
-      max-width: 90%; white-space: pre-wrap; word-break: break-word;
-      animation: fadeIn 0.3s ease;
+    .status-badge {
+      font-size: 0.75rem; padding: 4px 10px; border-radius: 12px; background: #333; color: #fbbf24;
+      white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis;
     }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-    .msg.user { background: #0284c7; color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3); }
-    .msg.ai { background: var(--bg-card); color: var(--text-main); align-self: flex-start; border-bottom-left-radius: 4px; border: 1px solid var(--border); }
+    .status-badge.ready { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3); }
 
-    /* 予想時間＆ステータス表示 */
-    .timer-badge {
-      font-size: 0.78rem; color: #fbbf24; background: rgba(251, 191, 36, 0.1);
-      border: 1px solid rgba(251, 191, 36, 0.3); padding: 4px 10px; border-radius: 20px;
-      display: inline-block; margin-bottom: 8px;
+    .zip-btn {
+      background: #16a34a; color: #fff; border: none; padding: 6px 14px; border-radius: 4px;
+      font-weight: bold; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 5px; white-space: nowrap;
+    }
+    .zip-btn:hover { background: #15803d; }
+
+    .workspace { display: flex; flex: 1; height: calc(100vh - 48px); overflow: hidden; }
+
+    /* 左：ファイルエディタ */
+    .editor-pane { flex: 1.25; display: flex; flex-direction: column; border-right: 1px solid var(--border); min-width: 300px; }
+    .file-tabs-bar {
+      background: #202023; display: flex; align-items: center; border-bottom: 1px solid var(--border);
+      overflow-x: auto; height: 36px;
+    }
+    .file-tab {
+      display: flex; align-items: center; gap: 6px; padding: 0 12px; height: 100%;
+      background: #2d2d2d; color: #aaa; border-right: 1px solid var(--border);
+      cursor: pointer; font-size: 0.8rem; user-select: none; white-space: nowrap;
+    }
+    .file-tab.active { background: var(--bg-base); color: #fff; border-top: 2px solid var(--accent); }
+    .file-tab .close-tab {
+      font-size: 0.75rem; color: #777; border-radius: 50%; width: 16px; height: 16px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .file-tab .close-tab:hover { background: #555; color: #fff; }
+    .add-file-btn {
+      background: none; border: none; color: #4fc1ff; font-size: 1rem; padding: 0 12px;
+      cursor: pointer; font-weight: bold; height: 100%;
+    }
+    .add-file-btn:hover { background: #333; }
+    #editor-container { flex: 1; width: 100%; }
+
+    /* 中央：プレビュー */
+    .preview-pane { flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: #fff; min-width: 260px; }
+    .pane-subheader {
+      background: var(--bg-card); padding: 0 12px; height: 36px; font-size: 0.8rem; font-weight: bold;
+      border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; color: #ccc;
+    }
+    #preview-frame { flex: 1; width: 100%; height: 100%; border: none; }
+
+    /* 右：AIチャット */
+    .chat-pane { width: 390px; display: flex; flex-direction: column; background: #18181b; }
+    .chat-controls { display: flex; align-items: center; gap: 6px; width: 100%; }
+    select#chat-session-select {
+      flex: 1; background: #333; color: #fff; border: 1px solid #555; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;
+    }
+    .btn-sm {
+      background: #333; color: #ccc; border: 1px solid #444; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; white-space: nowrap;
+    }
+    .btn-sm:hover { background: #444; color: #fff; }
+
+    #chat-box { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { padding: 10px 13px; border-radius: 8px; font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .msg.user { background: #0284c7; color: #fff; align-self: flex-end; max-width: 90%; }
+    .msg.ai { background: #252526; align-self: flex-start; width: 100%; border: 1px solid var(--border); }
+
+    .file-badge {
+      display: inline-block; background: #1e3a8a; color: #93c5fd; border: 1px solid #3b82f6;
+      font-family: monospace; font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; margin: 4px 4px 0 0;
     }
 
-    /* クイックチップ */
-    .quick-actions { padding: 8px 20px 0; display: flex; gap: 8px; flex-wrap: wrap; }
-    .chip-btn {
-      background: var(--bg-card); color: var(--accent); border: 1px solid var(--border); border-radius: 20px;
-      padding: 6px 14px; font-size: 0.8rem; cursor: pointer; transition: all 0.2s;
+    .quick-chips { padding: 8px 12px 0; display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip {
+      background: #27272a; color: #38bdf8; border: 1px solid #3f3f46; border-radius: 14px;
+      padding: 4px 10px; font-size: 0.75rem; cursor: pointer;
     }
-    .chip-btn:hover { background: var(--accent); color: var(--bg-base); border-color: var(--accent); }
+    .chip:hover { background: #0284c7; color: #fff; }
 
-    .input-area {
-      padding: 16px 20px 20px; background: var(--bg-base); border-top: 1px solid var(--border); display: flex; gap: 10px;
+    .input-area { padding: 10px 12px 12px; background: var(--bg-panel); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+    textarea#prompt {
+      width: 100%; height: 54px; background: #3c3c3c; color: #fff; border: 1px solid #555;
+      border-radius: 6px; padding: 8px; resize: none; font-size: 0.85rem; outline: none; font-family: inherit;
     }
-    textarea {
-      flex: 1; height: 54px; background: var(--bg-card); color: #fff; border: 1px solid var(--border);
-      border-radius: 10px; padding: 12px; resize: none; font-family: inherit; font-size: 0.9rem; outline: none;
-      transition: border-color 0.2s;
-    }
-    textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+    textarea#prompt:focus { border-color: var(--accent); }
+    .input-footer { display: flex; justify-content: space-between; align-items: center; }
     button#send-btn {
-      padding: 0 20px; background: var(--accent); color: var(--bg-base); border: none; border-radius: 10px;
-      font-weight: bold; cursor: pointer; transition: transform 0.1s, background 0.2s;
+      padding: 6px 16px; background: var(--accent); color: white; border: none; border-radius: 4px;
+      font-weight: bold; cursor: pointer; font-size: 0.82rem;
     }
-    button#send-btn:hover { background: #0ea5e9; transform: translateY(-1px); }
-    button#send-btn:active { transform: translateY(0); }
-    button#send-btn:disabled { background: var(--border); color: var(--text-sub); cursor: not-allowed; transform: none; }
-
-    .reset-btn {
-      background: var(--bg-card); color: var(--text-sub); border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; font-size: 0.78rem; cursor: pointer; transition: 0.2s;
-    }
-    .reset-btn:hover { color: #fff; border-color: var(--text-sub); }
-
-    /* 右側：プレイプレビューパネル */
-    .preview-panel {
-      flex: 1; display: flex; flex-direction: column; background: var(--bg-base);
-    }
-    .preview-header {
-      padding: 12px 24px; background: var(--bg-panel); border-bottom: 1px solid var(--border);
-      display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;
-    }
-    .preview-actions { display: flex; gap: 8px; }
-    .action-btn {
-      background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border);
-      padding: 6px 14px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; font-weight: 500;
-      display: flex; align-items: center; gap: 6px; transition: 0.2s;
-    }
-    .action-btn:hover { background: #374151; border-color: var(--accent); color: var(--accent); }
-    
-    #game-frame {
-      flex: 1; width: 100%; height: 100%; border: none; background: #fff;
-    }
+    button#send-btn:disabled { background: #444; color: #777; cursor: not-allowed; }
   </style>
 </head>
 <body>
 
-  <!-- 🌟 初回ロード画面（段階的・アニメーション付き） -->
-  <div id="loading-overlay">
-    <div class="loader-card">
-      <div class="spinner"></div>
-      <h3 style="margin:0 0 8px 0; color:var(--accent);">AIシステムを起動中</h3>
-      <p style="margin:0; font-size:0.85rem; color:var(--text-sub);">安全なオフライン環境を構築しています...</p>
-      <div class="progress-bar-container">
-        <div id="progress-bar" class="progress-bar"></div>
+  <header>
+    <div class="brand">
+      <h1>📁 Folder AI Studio</h1>
+      <select id="model-select" class="model-select" title="AIモデルの切り替え">
+        <option value="Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC">⚡ 軽量高速: Qwen2.5-Coder 1.5B</option>
+        <option value="Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC">🧠 高精度: Qwen2.5-Coder 3B</option>
+        <option value="SmolLM2-360M-Instruct-q4f16_1-MLC">🚀 超軽量即起動: SmolLM2 360M</option>
+      </select>
+    </div>
+
+    <div class="header-controls">
+      <div id="status-badge" class="status-badge">⏳ AIモデル準備中...</div>
+      <button class="zip-btn" onclick="downloadZip()">📦 フォルダ構成ZIP保存</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- 左：ファイルエディタ -->
+    <div class="editor-pane">
+      <div class="file-tabs-bar" id="file-tabs-bar"></div>
+      <div id="editor-container"></div>
+    </div>
+
+    <!-- 中央：プレビュー -->
+    <div class="preview-pane">
+      <div class="pane-subheader">
+        <span>🖥️ 統合ライブプレビュー</span>
+        <button class="btn-sm" style="background:#e5e7eb; color:#111; border-color:#ccc;" onclick="updatePreview()">↻ 更新</button>
       </div>
-      <div id="load-status">モデルをロード中 (初回のみダウンロードが発生します)</div>
+      <iframe id="preview-frame"></iframe>
+    </div>
+
+    <!-- 右：マルチチャットAI -->
+    <div class="chat-pane">
+      <div class="pane-subheader">
+        <div class="chat-controls">
+          <select id="chat-session-select" onchange="switchChatSession(this.value)"></select>
+          <button class="btn-sm" onclick="createNewChatSession()">＋新規</button>
+          <button class="btn-sm" onclick="deleteCurrentChatSession()">🗑️</button>
+        </div>
+      </div>
+
+      <div id="chat-box"></div>
+
+      <div class="quick-chips">
+        <button class="chip" onclick="quickSend('cssやjsフォルダを使って綺麗に整理して作って！')">📁 フォルダに分けて作って</button>
+        <button class="chip" onclick="quickSend('それでOK！コードを生成して')">👍 それでOK！</button>
+      </div>
+
+      <div class="input-area">
+        <textarea id="prompt" placeholder="AIの準備中...（左側で自由にコードを書いて試せます）" disabled></textarea>
+        <div class="input-footer">
+          <span style="font-size:0.72rem; color:#888;">Ctrl + Enter で送信</span>
+          <button id="send-btn" disabled>送信</button>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- 左側：おしゃべりエリア -->
-  <div class="chat-panel">
-    <div class="chat-header">
-      <div>
-        <h1>🎨 AI ゲーム工房</h1>
-      </div>
-      <button class="reset-btn" id="reset-btn">最初から話す</button>
-    </div>
-
-    <div id="chat-box">
-      <div class="msg ai">こんにちは！どんなゲームやオモチャを作りたいですか？<br><br>まずは気軽にイメージを教えてね！いくつか質問しながら一緒に形を決めていこう。</div>
-    </div>
-
-    <div class="quick-actions">
-      <button class="chip-btn" onclick="quickSend('おまかせでいいよ！作って！')">✨ おまかせで作って！</button>
-      <button class="chip-btn" onclick="quickSend('はい、その内容でお願いします！')">👍 それでOK！作って</button>
-      <button class="chip-btn" onclick="quickSend('もっと派手な演出にして！')">🎨 もっと派手にして</button>
-    </div>
-
-    <div class="input-area">
-      <textarea id="prompt" placeholder="例：ブロック崩しゲームを作りたい！"></textarea>
-      <button id="send-btn" disabled>送信</button>
-    </div>
-  </div>
-
-  <!-- 右側：遊ぶエリア -->
-  <div class="preview-panel">
-    <div class="preview-header">
-      <span id="app-title" style="color:var(--accent); font-weight:bold;">🎮 プレビュー待機中</span>
-      <div class="preview-actions">
-        <button class="action-btn" onclick="copyCode()">📋 コードをコピー</button>
-        <button class="action-btn" onclick="downloadFile()">💾 HTMLを保存</button>
-      </div>
-    </div>
-    <iframe id="game-frame"></iframe>
-  </div>
-
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
   <script type="module">
     import * as webllm from "https://esm.run/@mlc-ai/web-llm";
 
-    // iOSや環境負荷を考慮し、軽量かつコーディング性能の高い1.5Bモデルを採用
-    const MODEL_ID = "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC";
-    let engine;
+    let engine = null;
+    let editor = null;
+    let isGenerating = false;
 
-    let currentCode = `<!DOCTYPE html>
+    // デフォルトのフォルダ構成サンプル
+    const DEFAULT_FILES = {
+      "index.html": `<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <style>
-    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: #94a3b8; }
-    h2 { color: #38bdf8; margin-bottom: 8px; }
-  </style>
+  <title>Folder Structure App</title>
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <h2>🎨 ここに作ったゲームが表示されるよ</h2>
-  <p>左側のチャットでどんなものを作りたいか話しかけてね！</p>
+  <div class="card">
+    <h1>📂 フォルダ構成対応スタジオ</h1>
+    <p id="text">css/ や js/ の中にファイルを整理できるよ！</p>
+    <button id="btn">カウントアップ</button>
+  </div>
+  <script src="js/script.js"><\/script>
 </body>
-</html>`;
+</html>`,
+      "css/style.css": `body {
+  font-family: sans-serif;
+  background: #0f172a;
+  color: #fff;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  margin: 0;
+}
+.card {
+  background: #1e293b;
+  padding: 30px;
+  border-radius: 12px;
+  text-align: center;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+}
+button {
+  background: #38bdf8;
+  color: #0f172a;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+}`,
+      "js/script.js": `let count = 0;
+const btn = document.getElementById('btn');
+const text = document.getElementById('text');
 
-    const frame = document.getElementById('game-frame');
-    frame.srcdoc = currentCode;
+btn.addEventListener('click', () => {
+  count++;
+  text.textContent = count + '回クリックされました！';
+});`
+    };
 
-    const overlay = document.getElementById('loading-overlay');
-    const progressBar = document.getElementById('progress-bar');
-    const loadStatus = document.getElementById('load-status');
-    const sendBtn = document.getElementById('send-btn');
-    const chatBox = document.getElementById('chat-box');
-    const promptInput = document.getElementById('prompt');
+    let files = JSON.parse(localStorage.getItem('studio_folder_files')) || { ...DEFAULT_FILES };
+    let activeFileName = Object.keys(files)[0] || "index.html";
 
-    const SYSTEM_PROMPT = `あなたは初心者向けの優しいゲーム・アプリ制作パートナーAIです。
-ユーザーはプログラミングの知識がありません。専門用語は使わず、親しみやすい日本語で話してください。
-
-【重要な行動ルール】
-1. ユーザーから「〇〇を作りたい」と言われた時は、いきなりコードを書かず、まずはイメージを膨らませるための簡単な質問を2〜3個優しく投げかけてください。
-2. ユーザーが「OK」「おまかせ」と言ったら、制作フェーズに入ります。
-3. 制作フェーズでは、HTML、CSS、JavaScriptをすべて1つにまとめた完全なHTMLコードを \`\`\`html 〜 \`\`\` の形式で出力してください。`;
-
-    let chatHistory = [{ role: "system", content: SYSTEM_PROMPT }];
-
-    // WebLLMの初期化（段階的な進捗をリッチに表示）
-    async function init() {
-      try {
-        if (!navigator.gpu) {
-          loadStatus.textContent = "エラー: WebGPU非対応の環境です。最新のChromeまたはEdgeをお使いください。";
-          return;
-        }
-
-        engine = await webllm.CreateMLCEngine(MODEL_ID, {
-          initProgressCallback: (report) => {
-            loadStatus.textContent = report.text;
-            // 進捗テキストからパーセンテージや数値をざっくり推測してバーに反映
-            if (report.text.includes("%")) {
-              const match = report.text.match(/(\d+)%/);
-              if (match && match[1]) {
-                progressBar.style.width = match[1] + "%";
-              }
-            } else {
-              // 段階的にバーを進めるアニメーション演出
-              const currentWidth = parseFloat(progressBar.style.width) || 10;
-              if (currentWidth < 90) {
-                progressBar.style.width = (currentWidth + 15) + "%";
-              }
-            }
-          }
-        });
-
-        // ロード完了！
-        progressBar.style.width = "100%";
-        loadStatus.textContent = "準備完了！";
-        setTimeout(() => {
-          overlay.style.opacity = '0';
-          setTimeout(() => overlay.remove(), 500); // 画面から消す
-          sendBtn.disabled = false;
-        }, 400);
-
-      } catch (err) {
-        loadStatus.textContent = `初期化エラー: ${err.message}`;
+    let chatSessions = JSON.parse(localStorage.getItem('studio_folder_chats')) || [
+      {
+        id: "chat-1",
+        title: "メインチャット",
+        messages: [
+          { role: "assistant", text: "こんにちは！css/ や js/ などのフォルダにファイルを分けて、きれいな構造でアプリを作れるよ。何を作りたい？" }
+        ]
       }
+    ];
+    let activeChatId = chatSessions[0].id;
+
+    function getLanguageFromFilename(filename) {
+      if (filename.endsWith('.html')) return 'html';
+      if (filename.endsWith('.css')) return 'css';
+      if (filename.endsWith('.js')) return 'javascript';
+      return 'plaintext';
     }
 
-    window.quickSend = function(text) {
-      if (sendBtn.disabled) return;
-      promptInput.value = text;
-      sendMessage();
-    };
+    require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min' }});
+    require(['vs/editor/editor.main'], function() {
+      editor = monaco.editor.create(document.getElementById('editor-container'), {
+        value: files[activeFileName] || "",
+        language: getLanguageFromFilename(activeFileName),
+        theme: 'vs-dark',
+        automaticLayout: true,
+        fontSize: 13,
+        minimap: { enabled: false }
+      });
 
-    document.getElementById('reset-btn').addEventListener('click', () => {
-      chatHistory = [{ role: "system", content: SYSTEM_PROMPT }];
-      chatBox.innerHTML = `<div class="msg ai">会話をリセットしたよ！次はどんなものを作ろうか？</div>`;
+      editor.onDidChangeModelContent(() => {
+        files[activeFileName] = editor.getValue();
+        saveState();
+        updatePreview();
+      });
+
+      renderFileTabs();
+      updatePreview();
     });
 
-    // 📋 コードコピー機能
-    window.copyCode = function() {
-      navigator.clipboard.writeText(currentCode).then(() => {
-        alert("プレビューのコードをクリップボードにコピーしました！");
+    function saveState() {
+      localStorage.setItem('studio_folder_files', JSON.stringify(files));
+      localStorage.setItem('studio_folder_chats', JSON.stringify(chatSessions));
+    }
+
+    window.renderFileTabs = function() {
+      const bar = document.getElementById('file-tabs-bar');
+      bar.innerHTML = "";
+
+      Object.keys(files).forEach(filename => {
+        const tab = document.createElement('div');
+        tab.className = `file-tab ${filename === activeFileName ? 'active' : ''}`;
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = filename; // フォルダパスを含めてタブに表示 (例: js/script.js)
+        nameSpan.onclick = () => switchFile(filename);
+        tab.appendChild(nameSpan);
+
+        if (filename !== "index.html") {
+          const closeBtn = document.createElement('span');
+          closeBtn.className = "close-tab";
+          closeBtn.textContent = "×";
+          closeBtn.onclick = (e) => {
+            e.stopPropagation();
+            deleteFile(filename);
+          };
+          tab.appendChild(closeBtn);
+        }
+        bar.appendChild(tab);
       });
+
+      const addBtn = document.createElement('button');
+      addBtn.className = "add-file-btn";
+      addBtn.textContent = "+";
+      addBtn.title = "新しいファイルを追加 (例: js/game.js, css/sub.css)";
+      addBtn.onclick = createNewFile;
+      bar.appendChild(addBtn);
     };
 
-    // 💾 ファイル保存機能
-    window.downloadFile = function() {
-      const blob = new Blob([currentCode], { type: 'text/html;charset=utf-8' });
+    window.switchFile = function(filename) {
+      if (!files.hasOwnProperty(filename)) return;
+      activeFileName = filename;
+      if (editor) {
+        const model = monaco.editor.createModel(files[filename], getLanguageFromFilename(filename));
+        editor.setModel(model);
+        editor.onDidChangeModelContent(() => {
+          files[activeFileName] = editor.getValue();
+          saveState();
+          updatePreview();
+        });
+      }
+      renderFileTabs();
+    };
+
+    window.createNewFile = function() {
+      const name = prompt("フォルダとファイル名を入力してください\n（例: js/game.js, css/theme.css, components/modal.js）");
+      if (!name) return;
+      const cleanName = name.trim();
+      if (!cleanName || files[cleanName]) {
+        alert("無効なファイル名、または既に存在します。");
+        return;
+      }
+      files[cleanName] = cleanName.endsWith('.js') ? `// ${cleanName}\n` : cleanName.endsWith('.css') ? `/* ${cleanName} */\n` : "";
+      saveState();
+      switchFile(cleanName);
+    };
+
+    window.deleteFile = function(filename) {
+      if (!confirm(`${filename} を削除しますか？`)) return;
+      delete files[filename];
+      if (activeFileName === filename) {
+        activeFileName = Object.keys(files)[0] || "index.html";
+      }
+      saveState();
+      switchFile(activeFileName);
+      updatePreview();
+    };
+
+    // プレビュー用に複数ファイルを結合（パスの差異も柔軟に吸収）
+    window.updatePreview = function() {
+      let html = files["index.html"] || "<h1>index.html が見つかりません</h1>";
+      let combinedCss = "";
+      let combinedJs = "";
+
+      Object.entries(files).forEach(([path, content]) => {
+        const filename = path.split('/').pop();
+        if (path.endsWith('.css')) {
+          // パス指定でもファイル名だけでもリンクタグを除去してインライン展開
+          html = html.replace(new RegExp(`<link[^>]*href=["'](?:[^"']*/)?${filename}["'][^>]*>`, 'gi'), '');
+          combinedCss += `\n/* --- ${path} --- */\n${content}\n`;
+        } else if (path.endsWith('.js')) {
+          html = html.replace(new RegExp(`<script[^>]*src=["'](?:[^"']*/)?${filename}["'][^>]*><\\/script>`, 'gi'), '');
+          combinedJs += `\n// --- ${path} ---\n${content}\n`;
+        }
+      });
+
+      if (combinedCss) {
+        const styleTag = `<style>${combinedCss}</style>`;
+        html = html.includes('</head>') ? html.replace('</head>', `${styleTag}\n</head>`) : styleTag + html;
+      }
+      if (combinedJs) {
+        const scriptTag = `<script>${combinedJs}<\/script>`;
+        html = html.includes('</body>') ? html.replace('</body>', `${scriptTag}\n</body>`) : html + scriptTag;
+      }
+
+      document.getElementById('preview-frame').srcdoc = html;
+    };
+
+    // 📦 フォルダ構成を維持したZIP出力
+    window.downloadZip = async function() {
+      if (typeof JSZip === 'undefined') {
+        alert("ZIPライブラリの読み込み中です。");
+        return;
+      }
+      const zip = new JSZip();
+      Object.entries(files).forEach(([path, content]) => {
+        zip.file(path, content); // pathに "css/style.css" を渡すだけで自動的にフォルダが作られます！
+      });
+
+      const blob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const a = document.createElement("a");
       a.href = url;
-      a.download = 'my_ai_game.html';
+      a.download = "folder-project.zip";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     };
 
-    async function sendMessage() {
-      const text = promptInput.value.trim();
-      if (!text || !engine) return;
+    function renderChatSelector() {
+      const select = document.getElementById('chat-session-select');
+      select.innerHTML = "";
+      chatSessions.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.title;
+        if (s.id === activeChatId) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
 
+    function renderChatMessages() {
+      const box = document.getElementById('chat-box');
+      box.innerHTML = "";
+      const session = chatSessions.find(s => s.id === activeChatId);
+      if (!session) return;
+
+      session.messages.forEach(m => {
+        const div = document.createElement('div');
+        div.className = `msg ${m.role === 'user' ? 'user' : 'ai'}`;
+        div.textContent = m.text;
+        if (m.updatedFiles && m.updatedFiles.length > 0) {
+          const badgeContainer = document.createElement('div');
+          m.updatedFiles.forEach(fname => {
+            const b = document.createElement('span');
+            b.className = "file-badge";
+            b.textContent = `📁 ${fname}`;
+            badgeContainer.appendChild(b);
+          });
+          div.appendChild(badgeContainer);
+        }
+        box.appendChild(div);
+      });
+      box.scrollTop = box.scrollHeight;
+    }
+
+    window.switchChatSession = function(id) {
+      activeChatId = id;
+      renderChatMessages();
+    };
+
+    window.createNewChatSession = function() {
+      const num = chatSessions.length + 1;
+      const newId = "chat-" + Date.now();
+      chatSessions.push({
+        id: newId,
+        title: `チャット ${num}`,
+        messages: [{ role: "assistant", text: `新規チャット ${num} です。フォルダ構成を含めて何を作ろうか？` }]
+      });
+      activeChatId = newId;
+      saveState();
+      renderChatSelector();
+      renderChatMessages();
+    };
+
+    window.deleteCurrentChatSession = function() {
+      if (chatSessions.length <= 1) {
+        chatSessions[0].messages = [{ role: "assistant", text: "履歴をリセットしました！" }];
+      } else {
+        chatSessions = chatSessions.filter(s => s.id !== activeChatId);
+        activeChatId = chatSessions[0].id;
+      }
+      saveState();
+      renderChatSelector();
+      renderChatMessages();
+    };
+
+    async function loadModel(modelId) {
+      const badge = document.getElementById("status-badge");
+      const promptInput = document.getElementById("prompt");
+      const sendBtn = document.getElementById("send-btn");
+
+      badge.className = "status-badge";
+      promptInput.disabled = true;
+      sendBtn.disabled = true;
+
+      try {
+        if (!navigator.gpu) {
+          badge.textContent = "⚠️ WebGPU非対応環境です";
+          return;
+        }
+        engine = await webllm.CreateMLCEngine(modelId, {
+          initProgressCallback: (report) => {
+            badge.textContent = `⏳ ${report.text}`;
+          }
+        });
+        badge.className = "status-badge ready";
+        badge.textContent = `✨ AI準備完了 (${modelId.split('-')[0]})`;
+        promptInput.disabled = false;
+        promptInput.placeholder = "例：css/ と js/ フォルダを使ってミニゲームを作って！";
+        sendBtn.disabled = false;
+      } catch (err) {
+        badge.textContent = `❌ ロード失敗: ${err.message}`;
+      }
+    }
+
+    document.getElementById('model-select').addEventListener('change', (e) => {
+      loadModel(e.target.value);
+    });
+
+    window.quickSend = function(text) {
+      if (document.getElementById('send-btn').disabled) return;
+      document.getElementById('prompt').value = text;
+      sendToAI();
+    };
+
+    async function sendToAI() {
+      const promptInput = document.getElementById("prompt");
+      const sendBtn = document.getElementById("send-btn");
+      const text = promptInput.value.trim();
+      if (!text || !engine || isGenerating) return;
+
+      isGenerating = true;
       promptInput.value = "";
       sendBtn.disabled = true;
 
-      // ユーザーメッセージ表示
-      const userDiv = document.createElement('div');
-      userDiv.className = "msg user";
-      userDiv.textContent = text;
-      chatBox.appendChild(userDiv);
-      chatBox.scrollTop = chatBox.scrollHeight;
+      const session = chatSessions.find(s => s.id === activeChatId);
+      if (session.messages.length <= 1) {
+        session.title = text.slice(0, 14) + (text.length > 14 ? "..." : "");
+        renderChatSelector();
+      }
 
-      chatHistory.push({ role: "user", content: text + `\n\n(現在のコード)\n\`\`\`html\n${currentCode}\n\`\`\`` });
+      session.messages.push({ role: "user", text: text });
+      saveState();
+      renderChatMessages();
 
-      const messagesToSend = [chatHistory[0], ...chatHistory.slice(-8)];
-
-      const aiDiv = document.createElement('div');
+      const chatBox = document.getElementById("chat-box");
+      const aiDiv = document.createElement("div");
       aiDiv.className = "msg ai";
-      aiDiv.innerHTML = `<div class="timer-badge">⏳ 予想完了時間: 約 5〜10 秒</div><div class="ai-text">AIが考えています...</div>`;
+      aiDiv.textContent = "考え中...";
       chatBox.appendChild(aiDiv);
       chatBox.scrollTop = chatBox.scrollHeight;
 
-      const aiTextEl = aiDiv.querySelector('.ai-text');
+      // フォルダ構造を使うようAIに厳格に指示するプロンプト
+      const SYSTEM_PROMPT = `あなたは初心者向けの優しいWebアプリ・ゲーム制作パートナーAIです。
+ユーザーはプログラミング初心者です。
+
+【重要ルール】
+1. 制作の際は、必ずフォルダ構造を意識してファイルを整理してください（例: index.html, css/style.css, js/script.js など）。
+2. 出力する際は、必ず以下のフォーマットでファイルパスを明記してください。
+
+[FILE: index.html]
+\`\`\`html
+...
+\`\`\`
+
+[FILE: css/style.css]
+\`\`\`css
+...
+\`\`\`
+
+[FILE: js/script.js]
+\`\`\`javascript
+...
+\`\`\`
+
+※HTML内のリンクは <link rel="stylesheet" href="css/style.css"> や <script src="js/script.js"></script> のように正しいフォルダパスを指定してください。`;
+
+      let filesContext = "【現在のプロジェクトファイル一覧】\n";
+      Object.entries(files).forEach(([fname, content]) => {
+        filesContext += `\n--- ${fname} ---\n\`\`\`\n${content}\n\`\`\`\n`;
+      });
+
+      const historyMessages = session.messages.slice(-6).map(m => ({
+        role: m.role,
+        content: m.text
+      }));
+      historyMessages[historyMessages.length - 1].content += `\n\n${filesContext}`;
 
       try {
-        const startTime = Date.now();
         const chunks = await engine.chat.completions.create({
-          messages: messagesToSend,
-          temperature: 0.6,
+          messages: [{ role: "system", content: SYSTEM_PROMPT }, ...historyMessages],
+          temperature: 0.4,
           stream: true,
         });
 
         let fullReply = "";
         for await (const chunk of chunks) {
           fullReply += chunk.choices[0]?.delta?.content || "";
-          if (fullReply.includes("```")) {
-            aiTextEl.textContent = "🔨 アプリを組み立て中...";
+          if (fullReply.includes("[FILE:")) {
+            const intro = fullReply.split("[FILE:")[0].trim();
+            aiDiv.textContent = (intro ? intro + "\n\n" : "") + "📁 フォルダとファイルを整理・生成中...";
           } else {
-            aiTextEl.textContent = fullReply;
+            aiDiv.textContent = fullReply;
           }
           chatBox.scrollTop = chatBox.scrollHeight;
         }
 
-        chatHistory.push({ role: "assistant", content: fullReply });
+        const fileRegex = /\[FILE:\s*([^\]]+)\]\s*```(?:\w+)?\n([\s\S]*?)```/g;
+        let match;
+        const updatedFiles = [];
 
-        // コード抽出＆プレビュー自動更新
-        const match = fullReply.match(/```(?:html)?([\s\S]*?)```/);
-        if (match && match[1]) {
-          currentCode = match[1].trim();
-          frame.srcdoc = currentCode;
-          document.getElementById('app-title').textContent = "🎮 プレイ可能！";
-          aiTextEl.textContent = "🎉 完成したよ！右側のプレビュー画面で遊んでみてね。コードの保存やコピーも上部からできるよ！";
-        } else {
-          aiTextEl.textContent = fullReply;
+        while ((match = fileRegex.exec(fullReply)) !== null) {
+          const path = match[1].trim();
+          const code = match[2].trim();
+          files[path] = code;
+          updatedFiles.push(path);
         }
 
+        let cleanReplyText = fullReply;
+        if (updatedFiles.length > 0) {
+          const intro = fullReply.split("[FILE:")[0].trim();
+          cleanReplyText = (intro ? intro + "\n\n" : "") + "🎉 フォルダ構成でファイルを作成・更新しました！プレビューで遊んでみてね。ZIP保存するとこのままフォルダ構造で保存されます！";
+          
+          switchFile(updatedFiles[0]);
+          updatePreview();
+        }
+
+        session.messages.push({
+          role: "assistant",
+          text: cleanReplyText,
+          updatedFiles: updatedFiles
+        });
+        saveState();
+        renderChatMessages();
+
       } catch (err) {
-        aiTextEl.textContent = `エラーが発生しました: ${err.message}`;
+        aiDiv.textContent = `エラー: ${err.message}`;
       } finally {
+        isGenerating = false;
         sendBtn.disabled = false;
-        chatBox.scrollTop = chatBox.scrollHeight;
       }
     }
 
-    sendBtn.addEventListener('click', sendMessage);
-    promptInput.addEventListener('keydown', (e) => {
+    document.getElementById("send-btn").addEventListener("click", sendToAI);
+    document.getElementById("prompt").addEventListener("keydown", (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        sendMessage();
+        sendToAI();
       }
     });
 
-    init();
+    renderChatSelector();
+    renderChatMessages();
+    loadModel(document.getElementById('model-select').value);
   </script>
 </body>
 </html>
