@@ -14,14 +14,12 @@
 </head>
 <body class="bg-neutral-950 text-neutral-100">
 
-<!-- 起動画面 -->
 <div id="loading" class="h-screen flex flex-col items-center justify-center gap-4 p-8 text-center">
   <h1 class="text-2xl font-bold">WebLLM Pair</h1>
   <p id="progress" class="text-neutral-400 max-w-md">機種を確認中…</p>
   <p id="profile" class="text-xs text-neutral-500"></p>
 </div>
 
-<!-- メイン画面 -->
 <div id="app" class="hidden h-screen flex-col">
   <header class="flex items-center justify-between px-3 py-2 border-b border-neutral-800">
     <div class="text-sm font-bold">WebLLM Pair</div>
@@ -71,14 +69,13 @@
 <script type="module">
 import * as webllm from "https://esm.run/@mlc-ai/web-llm";
 
-// ── モデル定義 ──
 const MODELS = {
   light:    "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
   standard: "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC",
   heavy:    "Phi-3.5-mini-instruct-q4f16_1-MLC",
 };
 
-// ── システムプロンプト（< を使わないマーカー）──
+// ── システムプロンプト（< を一切使わないマーカー）──
 const SYSTEM_PROMPT = `あなたはコード編集アシスタントです。以下の形式だけを使います。
 
 # ルール1: まず質問する
@@ -114,10 +111,11 @@ const SYSTEM_PROMPT = `あなたはコード編集アシスタントです。以
 - マーカー外にコードを書かない
 - 説明文は日本語で短く
 - SEARCH / AFTER は既存コードから一字一句コピーする
-- 既存ファイルは index.html, style.css, script.js の3つ。index.html から
-  link rel=stylesheet href=style.css と script src=script.js で参照する
-- 新しいファイルを作る場合は index.html からの参照も@@EDIT@@で追加する
-- エラー修正時は原因を1行述べてから@@EDIT@@を出す`;
+- 既存ファイルは index.html, style.css, script.js の3つ。
+  index.html から link rel=stylesheet href=style.css と
+  script src=script.js で参照する
+- 新しいファイルを作る場合は index.html からの参照も @@EDIT@@ で追加する
+- エラー修正時は原因を1行述べてから @@EDIT@@ を出す`;
 
 // ── 状態 ──
 let engine = null;
@@ -178,7 +176,7 @@ async function detectDeviceProfile() {
     recommendedTier: "standard", reason: "標準的なGPUバッファです。" };
 }
 
-// ── 出力パーサー（新マーカー）──
+// ── 出力パーサー（新マーカー @@ と ###）──
 function parseAIOutput(text) {
   const edits = [];
   const questions = [];
