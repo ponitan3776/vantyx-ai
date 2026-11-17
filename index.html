@@ -67,56 +67,71 @@
 </script>
 
 <script type="module">
-// ── 静的importを使わない（ブロックの原因になる）──
 let webllm = null;
 
+// デスクトップ標準はPhi-3.5-mini（小型より賢い）
 const MODELS = {
   light:    "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
-  standard: "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC",
-  heavy:    "Phi-3.5-mini-instruct-q4f16_1-MLC",
+  standard: "Phi-3.5-mini-instruct-q4f16_1-MLC",
+  heavy:    "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC",
 };
 
-// ── システムプロンプト（< を一切使わないマーカー）──
-const SYSTEM_PROMPT = `あなたはコード編集アシスタントです。以下の形式だけを使います。
+// 番号付きルールを使わず、例だけで形式を教える
+const SYSTEM_PROMPT = `あなたはコード編集アシスタントです。日本語で短く答えます。
 
-# ルール1: まず質問する
-依頼が曖昧・情報不足なら、編集せずに1〜3個の質問だけを出します。
-[QUESTION]
-質問内容
-[/QUESTION]
+ファイルを変更するときは、次の形式だけを出力します。説明文は形式の前に1〜2行だけ書きます。
 
-# ルール2: 部分編集のみ（全体を書き直さない）
-既存行の置き換え:
 @@EDIT:ファイル名@@
 ###SEARCH###
-既存と完全一致する変更前のコード
+変更前のコード（既存と完全一致）
 ###REPLACE###
 変更後のコード
 ###END###
 
-既存行の直後に追加:
-@@ADD:ファイル名@@
-###AFTER###
-挿入位置の直前の既存コード
-###CONTENT###
-追加するコード
-###END###
+ファイルを新規作成するときは次の形式です。
 
-新規ファイル作成:
 @@CREATE:ファイル名@@
 ###CONTENT###
-ファイル内容
+ファイルの内容
 ###END###
 
-# ルール3
-- マーカー外にコードを書かない
-- 説明文は日本語で短く
-- SEARCH / AFTER は既存コードから一字一句コピーする
-- 既存ファイルは index.html, style.css, script.js の3つ
-- 新しいファイルを作る場合は index.html からの参照も @@EDIT@@ で追加する
-- エラー修正時は原因を1行述べてから @@EDIT@@ を出す`;
+質問したいときは、形式を使わず普通の文章で質問だけを書きます。
 
-// ── 状態 ──
+--- 例1 ---
+ユーザー: 背景を青にして
+あなた:
+style.cssのbody背景色を青にします。
+
+@@EDIT:style.css@@
+###SEARCH###
+body { font-family: system-ui; padding: 24px; }
+###REPLACE###
+body { font-family: system-ui; padding: 24px; background: blue; }
+###END###
+
+--- 例2 ---
+ユーザー: 面白いサイト作って
+あなた:
+どんな雰囲気がいいですか？
+・ミニマル
+・ポップ
+・ダーク
+
+--- 例3 ---
+ユーザー: ボタンを追加して
+あなた:
+index.htmlのh1の下にボタンを追加します。
+
+@@EDIT:index.html@@
+###SEARCH###
+  <h1>Hello</h1>
+###REPLACE###
+  <h1>Hello</h1>
+  <button>クリック</button>
+###END###
+
+重要: この説明文自体を出力にコピーしないこと。必ずユーザーの依頼に対してだけ答える。`;
+
 let engine = null, modelId = null, chatHistory = [];
 let currentFS = {
   "index.html": `<!doctype html>
@@ -136,7 +151,6 @@ let currentFS = {
 };
 let selected = "index.html", editor = null, busy = false;
 
-// ── 機種判定 ──
 async function detectDeviceProfile() {
   const ua = navigator.userAgent;
   const isIOS = /iPad|iPhone|iPod/.test(ua) ||
@@ -144,51 +158,47 @@ async function detectDeviceProfile() {
   const isMobile = /Android|iPhone|iPad|iPod/i.test(ua);
 
   if (!("gpu" in navigator) || !navigator.gpu) {
-    return { webgpu: false, isIOS, isMobile, maxBufferSize: 0,
-      recommendedTier: "light", reason: "WebGPU非対応。軽量モデルのみ使用します。" };
+    return { webgpu: false, isIOS, isMobile, recommendedTier: "light",
+      reason: "WebGPU非対応。軽量モデルのみ使用します。" };
   }
   let adapter = null;
   try { adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" }); }
   catch { adapter = null; }
   if (!adapter) {
-    return { webgpu: false, isIOS, isMobile, maxBufferSize: 0,
-      recommendedTier: "light", reason: "WebGPUアダプタ取得失敗。軽量モデルのみ使用します。" };
+    return { webgpu: false, isIOS, isMobile, recommendedTier: "light",
+      reason: "WebGPUアダプタ取得失敗。軽量モデルのみ使用します。" };
   }
-  const maxBufferSize = adapter.limits.maxBufferSize;
   if (isIOS) {
-    return { webgpu: true, isIOS, isMobile, maxBufferSize,
-      recommendedTier: "light", reason: "iOSはメモリ上限が厳しいため軽量モデル固定です。" };
+    return { webgpu: true, isIOS, isMobile, recommendedTier: "light",
+      reason: "iOSはメモリ上限が厳しいため軽量モデル固定です。" };
   }
-  if (maxBufferSize >= 2 * 1024 * 1024 * 1024) {
-    return { webgpu: true, isIOS, isMobile, maxBufferSize,
-      recommendedTier: "heavy", reason: "十分なGPUバッファがあります。" };
-  }
-  return { webgpu: true, isIOS, isMobile, maxBufferSize,
-    recommendedTier: "standard", reason: "標準的なGPUバッファです。" };
+  return { webgpu: true, isIOS, isMobile, recommendedTier: "standard",
+    reason: "デスクトップ向けにPhi-3.5-miniを使用します。" };
 }
 
-// ── 出力パーサー（@@ と ### マーカー）──
 function parseAIOutput(text) {
-  const edits = [], questions = [];
+  const edits = [];
   let m;
-  const qRe = /\[QUESTION\]\s*([\s\S]*?)\s*\[\/QUESTION\]/g;
-  while ((m = qRe.exec(text))) questions.push(m[1].trim());
   const eRe = /@@EDIT:([^@]+)@@\s*###SEARCH###\s*([\s\S]*?)\s*###REPLACE###\s*([\s\S]*?)\s*###END###/g;
   while ((m = eRe.exec(text))) edits.push({ kind: "replace", file: m[1].trim(), search: m[2].trim(), replace: m[3].trim() });
-  const aRe = /@@ADD:([^@]+)@@\s*###AFTER###\s*([\s\S]*?)\s*###CONTENT###\s*([\s\S]*?)\s*###END###/g;
-  while ((m = aRe.exec(text))) edits.push({ kind: "add", file: m[1].trim(), after: m[2].trim(), content: m[3].trim() });
   const cRe = /@@CREATE:([^@]+)@@\s*###CONTENT###\s*([\s\S]*?)\s*###END###/g;
   while ((m = cRe.exec(text))) edits.push({ kind: "create", file: m[1].trim(), content: m[2].trim() });
   const explanation = text
-    .replace(/\[QUESTION\][\s\S]*?\[\/QUESTION\]/g, "")
     .replace(/@@EDIT:[^@]+@@[\s\S]*?###END###/g, "")
-    .replace(/@@ADD:[^@]+@@[\s\S]*?###END###/g, "")
     .replace(/@@CREATE:[^@]+@@[\s\S]*?###END###/g, "")
     .trim();
-  return { edits, questions, explanation };
+  return { edits, explanation };
 }
 
-// ── 編集適用 ──
+// マーカー漏れ・プロンプトのコピーを検出
+function looksBroken(text) {
+  const hasPartial = /###SEARCH###|###REPLACE###|###CONTENT###|@@EDIT:|@@CREATE:/.test(text);
+  const hasComplete = /@@EDIT:([^@]+)@@\s*###SEARCH###[\s\S]*?###REPLACE###[\s\S]*?###END###/.test(text)
+    || /@@CREATE:([^@]+)@@\s*###CONTENT###[\s\S]*?###END###/.test(text);
+  const copiedPrompt = /ルール\d|あなたはコード編集アシスタントです|重要: この説明文/.test(text);
+  return (hasPartial && !hasComplete) || copiedPrompt;
+}
+
 function applyEdits(fs, edits) {
   const next = { ...fs };
   const errors = [];
@@ -199,21 +209,13 @@ function applyEdits(fs, edits) {
     }
     const content = next[e.file];
     if (content === undefined) { errors.push(`ファイル "${e.file}" がありません`); continue; }
-    if (e.kind === "replace") {
-      const i = content.indexOf(e.search);
-      if (i === -1) { errors.push(`"${e.file}" に SEARCH が見つかりません`); continue; }
-      next[e.file] = content.slice(0, i) + e.replace + content.slice(i + e.search.length);
-    } else {
-      const i = content.indexOf(e.after);
-      if (i === -1) { errors.push(`"${e.file}" に AFTER が見つかりません`); continue; }
-      const at = i + e.after.length;
-      next[e.file] = content.slice(0, at) + "\n" + e.content + content.slice(at);
-    }
+    const i = content.indexOf(e.search);
+    if (i === -1) { errors.push(`"${e.file}" に SEARCH が見つかりません`); continue; }
+    next[e.file] = content.slice(0, i) + e.replace + content.slice(i + e.search.length);
   }
   return { fs: next, errors };
 }
 
-// ── DOM参照 ──
 const $ = (id) => document.getElementById(id);
 const loadingEl = $("loading"), appEl = $("app");
 const progressEl = $("progress"), profileEl = $("profile");
@@ -221,8 +223,7 @@ const chatLogEl = $("chatLog"), chatInputEl = $("chatInput"), sendBtnEl = $("sen
 const fileListEl = $("fileList"), addFileBtnEl = $("addFileBtn");
 const zipBtnEl = $("zipBtn"), previewFrameEl = $("previewFrame");
 
-// ── チャット表示 ──
-function pushLog(role, content) {
+function pushLog(role, content, extra) {
   const div = document.createElement("div");
   div.className = role === "user" ? "text-right" : "";
   const span = document.createElement("span");
@@ -230,11 +231,16 @@ function pushLog(role, content) {
     role === "user" ? "bg-blue-600 text-white" : "bg-neutral-800"}`;
   span.textContent = content;
   div.appendChild(span);
+  if (extra) {
+    const det = document.createElement("details");
+    det.className = "mt-1 text-xs text-neutral-500";
+    det.innerHTML = `<summary class="cursor-pointer">生の出力を見る</summary><pre class="mt-1 p-2 bg-neutral-900 rounded overflow-auto whitespace-pre-wrap">${extra.replace(/</g,"&lt;")}</pre>`;
+    div.appendChild(det);
+  }
   chatLogEl.appendChild(div);
   chatLogEl.scrollTop = chatLogEl.scrollHeight;
 }
 
-// ── ファイル一覧 ──
 function renderFileList() {
   fileListEl.innerHTML = "";
   for (const f of Object.keys(currentFS)) {
@@ -272,7 +278,6 @@ function updatePreview() {
     `<body>${html}<script>${js}<\/script></body></html>`;
 }
 
-// ── モバイルタブ ──
 document.querySelectorAll(".tab-btn").forEach((btn) => {
   btn.onclick = () => {
     const tab = btn.dataset.tab;
@@ -287,37 +292,52 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
   };
 });
 
-// ── 送信 ──
+async function generateOnce(messages) {
+  const stream = await engine.chat.completions.create({
+    messages, stream: true, temperature: 0.1, max_tokens: 1024,
+  });
+  let acc = "";
+  for await (const chunk of stream) acc += chunk.choices[0]?.delta?.content || "";
+  return acc;
+}
+
 async function sendMessage() {
   if (!chatInputEl.value.trim() || busy || !engine) return;
   const msg = chatInputEl.value.trim();
   chatInputEl.value = "";
   busy = true; sendBtnEl.disabled = true;
   pushLog("user", msg);
+
   try {
     if (editor) currentFS[selected] = editor.getValue();
     const fsDump = Object.entries(currentFS).map(([n, c]) => `--- ${n} ---\n${c}`).join("\n\n");
-    const messages = [
+
+    let messages = [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: `現在のファイル:\n${fsDump}` },
-      ...chatHistory,
-      { role: "user", content: msg },
+      { role: "user", content: `現在のファイル:\n${fsDump}\n\n依頼: ${msg}` },
     ];
-    const stream = await engine.chat.completions.create({
-      messages, stream: true, temperature: 0.1, max_tokens: 1024,
-    });
-    let acc = "";
-    for await (const chunk of stream) acc += chunk.choices[0]?.delta?.content || "";
+
+    let acc = await generateOnce(messages);
+    let parsed = parseAIOutput(acc);
+
+    // 壊れていたら1回リトライ
+    if (looksBroken(acc) || (parsed.edits.length === 0 && parsed.explanation.length < 3)) {
+      console.log("[retry] broken output:", acc);
+      messages = [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: `現在のファイル:\n${fsDump}\n\n依頼: ${msg}` },
+        { role: "assistant", content: acc },
+        { role: "user", content: "形式が違います。説明文は形式の前に1〜2行だけ。必ず @@EDIT:ファイル名@@ で始まるブロックを出してください。説明文のコピーは禁止。" },
+      ];
+      acc = await generateOnce(messages);
+      parsed = parseAIOutput(acc);
+    }
+
     chatHistory.push({ role: "user", content: msg });
     chatHistory.push({ role: "assistant", content: acc });
-    const { edits, questions, explanation } = parseAIOutput(acc);
-    if (questions.length > 0) {
-      pushLog("assistant", (explanation ? explanation + "\n\n" : "") +
-        questions.map((q) => "・" + q).join("\n"));
-      return;
-    }
-    if (edits.length > 0) {
-      const { fs: next, errors } = applyEdits(currentFS, edits);
+
+    if (parsed.edits.length > 0) {
+      const { fs: next, errors } = applyEdits(currentFS, parsed.edits);
       currentFS = next;
       if (!currentFS[selected]) selected = Object.keys(currentFS)[0];
       renderFileList();
@@ -328,10 +348,10 @@ async function sendMessage() {
         editor.setValue(currentFS[selected] ?? "");
       }
       updatePreview();
-      pushLog("assistant", (explanation || "修正しました。") +
-        (errors.length ? "\n\n⚠️ " + errors.join("\n⚠️ ") : ""));
+      pushLog("assistant", (parsed.explanation || "修正しました。") +
+        (errors.length ? "\n\n⚠️ " + errors.join("\n⚠️ ") : ""), acc);
     } else {
-      pushLog("assistant", explanation || "…");
+      pushLog("assistant", parsed.explanation || "（出力なし）", acc);
     }
   } catch (err) {
     pushLog("assistant", "エラー: " + String(err));
@@ -342,7 +362,6 @@ async function sendMessage() {
 sendBtnEl.onclick = sendMessage;
 chatInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") sendMessage(); });
 
-// ── ファイル追加 ──
 addFileBtnEl.onclick = () => {
   const name = prompt("新しいファイル名（例: about.html）");
   if (!name) return;
@@ -351,7 +370,6 @@ addFileBtnEl.onclick = () => {
   selectFile(name);
 };
 
-// ── ZIP保存 ──
 zipBtnEl.onclick = async () => {
   if (editor) currentFS[selected] = editor.getValue();
   const zip = new JSZip();
@@ -364,7 +382,6 @@ zipBtnEl.onclick = async () => {
   URL.revokeObjectURL(url);
 };
 
-// ── 裏DL ──
 function preloadModel(id) {
   if (id === modelId) return;
   const code = `
@@ -385,36 +402,30 @@ function preloadModel(id) {
   worker.onmessage = () => worker.terminate();
 }
 
-// ── 起動（段階ログ付き）──
 async function boot() {
   try {
     console.log("[1] boot start");
     progressEl.textContent = "機種を確認中…";
     const profile = await detectDeviceProfile();
-    console.log("[2] profile", profile);
     profileEl.textContent =
       `判定: ${profile.recommendedTier} / WebGPU: ${profile.webgpu} / iOS: ${profile.isIOS} / ${profile.reason}`;
 
     progressEl.textContent = `${profile.reason} WebLLMを読み込み中…`;
     try {
       webllm = await import("https://esm.run/@mlc-ai/web-llm");
-      console.log("[3] webllm loaded");
     } catch (e) {
-      progressEl.textContent = "WebLLMの読み込みに失敗: " + e.message + "（HTTPSで開いていますか？）";
-      console.error(e);
+      progressEl.textContent = "WebLLMの読み込みに失敗: " + e.message;
       return;
     }
 
     progressEl.textContent = `${profile.reason} モデル読み込み中…`;
-    const startModel = profile.recommendedTier === "light" ? MODELS.light : MODELS.standard;
+    const startModel = MODELS[profile.recommendedTier];
     engine = await webllm.CreateMLCEngine(startModel, {
       appConfig: { ...webllm.prebuiltAppConfig, cacheBackend: "opfs" },
       initProgressCallback: (p) => { progressEl.textContent = p.text; },
     });
     modelId = startModel;
-    console.log("[4] engine ready");
 
-    // Monacoが準備できなくても落ちないように
     let monaco = null;
     try {
       monaco = await Promise.race([
@@ -432,9 +443,6 @@ async function boot() {
         currentFS[selected] = editor.getValue();
         updatePreview();
       });
-    } else {
-      $("editorPane").innerHTML =
-        '<div class="p-4 text-sm text-red-400">エディタの読み込みに失敗しました（Monaco CDN）。</div>';
     }
 
     loadingEl.classList.add("hidden");
@@ -443,13 +451,7 @@ async function boot() {
 
     renderFileList();
     updatePreview();
-    pushLog("assistant", "何を作りたいか教えてください。まずは質問しながら進めます。");
-    console.log("[5] done");
-
-    if (!profile.isIOS) {
-      const bg = profile.recommendedTier === "heavy" ? MODELS.heavy : MODELS.standard;
-      if (bg !== startModel) preloadModel(bg);
-    }
+    pushLog("assistant", `モデル: ${startModel}。何を作りたいか教えてください。`);
   } catch (err) {
     console.error(err);
     progressEl.textContent = "初期化に失敗: " + (err?.message || String(err));
