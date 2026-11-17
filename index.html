@@ -67,7 +67,8 @@
 </script>
 
 <script type="module">
-import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+// ── 静的importを使わない（ブロックの原因になる）──
+let webllm = null;
 
 const MODELS = {
   light:    "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
@@ -111,16 +112,12 @@ const SYSTEM_PROMPT = `あなたはコード編集アシスタントです。以
 - マーカー外にコードを書かない
 - 説明文は日本語で短く
 - SEARCH / AFTER は既存コードから一字一句コピーする
-- 既存ファイルは index.html, style.css, script.js の3つ。
-  index.html から link rel=stylesheet href=style.css と
-  script src=script.js で参照する
+- 既存ファイルは index.html, style.css, script.js の3つ
 - 新しいファイルを作る場合は index.html からの参照も @@EDIT@@ で追加する
 - エラー修正時は原因を1行述べてから @@EDIT@@ を出す`;
 
 // ── 状態 ──
-let engine = null;
-let modelId = null;
-let chatHistory = [];
+let engine = null, modelId = null, chatHistory = [];
 let currentFS = {
   "index.html": `<!doctype html>
 <html>
@@ -131,15 +128,13 @@ let currentFS = {
 </head>
 <body>
   <h1>Hello</h1>
-  <script src="script.js"></script>
+  <script src="script.js"><\/script>
 </body>
 </html>`,
   "style.css": `body { font-family: system-ui; padding: 24px; }`,
   "script.js": `console.log("ready");`,
 };
-let selected = "index.html";
-let editor = null;
-let busy = false;
+let selected = "index.html", editor = null, busy = false;
 
 // ── 機種判定 ──
 async function detectDeviceProfile() {
@@ -152,18 +147,14 @@ async function detectDeviceProfile() {
     return { webgpu: false, isIOS, isMobile, maxBufferSize: 0,
       recommendedTier: "light", reason: "WebGPU非対応。軽量モデルのみ使用します。" };
   }
-
   let adapter = null;
   try { adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" }); }
   catch { adapter = null; }
-
   if (!adapter) {
     return { webgpu: false, isIOS, isMobile, maxBufferSize: 0,
       recommendedTier: "light", reason: "WebGPUアダプタ取得失敗。軽量モデルのみ使用します。" };
   }
-
   const maxBufferSize = adapter.limits.maxBufferSize;
-
   if (isIOS) {
     return { webgpu: true, isIOS, isMobile, maxBufferSize,
       recommendedTier: "light", reason: "iOSはメモリ上限が厳しいため軽量モデル固定です。" };
@@ -176,37 +167,24 @@ async function detectDeviceProfile() {
     recommendedTier: "standard", reason: "標準的なGPUバッファです。" };
 }
 
-// ── 出力パーサー（新マーカー @@ と ###）──
+// ── 出力パーサー（@@ と ### マーカー）──
 function parseAIOutput(text) {
-  const edits = [];
-  const questions = [];
+  const edits = [], questions = [];
   let m;
-
   const qRe = /\[QUESTION\]\s*([\s\S]*?)\s*\[\/QUESTION\]/g;
   while ((m = qRe.exec(text))) questions.push(m[1].trim());
-
   const eRe = /@@EDIT:([^@]+)@@\s*###SEARCH###\s*([\s\S]*?)\s*###REPLACE###\s*([\s\S]*?)\s*###END###/g;
-  while ((m = eRe.exec(text))) {
-    edits.push({ kind: "replace", file: m[1].trim(), search: m[2].trim(), replace: m[3].trim() });
-  }
-
+  while ((m = eRe.exec(text))) edits.push({ kind: "replace", file: m[1].trim(), search: m[2].trim(), replace: m[3].trim() });
   const aRe = /@@ADD:([^@]+)@@\s*###AFTER###\s*([\s\S]*?)\s*###CONTENT###\s*([\s\S]*?)\s*###END###/g;
-  while ((m = aRe.exec(text))) {
-    edits.push({ kind: "add", file: m[1].trim(), after: m[2].trim(), content: m[3].trim() });
-  }
-
+  while ((m = aRe.exec(text))) edits.push({ kind: "add", file: m[1].trim(), after: m[2].trim(), content: m[3].trim() });
   const cRe = /@@CREATE:([^@]+)@@\s*###CONTENT###\s*([\s\S]*?)\s*###END###/g;
-  while ((m = cRe.exec(text))) {
-    edits.push({ kind: "create", file: m[1].trim(), content: m[2].trim() });
-  }
-
+  while ((m = cRe.exec(text))) edits.push({ kind: "create", file: m[1].trim(), content: m[2].trim() });
   const explanation = text
     .replace(/\[QUESTION\][\s\S]*?\[\/QUESTION\]/g, "")
     .replace(/@@EDIT:[^@]+@@[\s\S]*?###END###/g, "")
     .replace(/@@ADD:[^@]+@@[\s\S]*?###END###/g, "")
     .replace(/@@CREATE:[^@]+@@[\s\S]*?###END###/g, "")
     .trim();
-
   return { edits, questions, explanation };
 }
 
@@ -214,16 +192,13 @@ function parseAIOutput(text) {
 function applyEdits(fs, edits) {
   const next = { ...fs };
   const errors = [];
-
   for (const e of edits) {
     if (e.kind === "create") {
       if (next[e.file] !== undefined) { errors.push(`"${e.file}" は既に存在します`); continue; }
-      next[e.file] = e.content;
-      continue;
+      next[e.file] = e.content; continue;
     }
     const content = next[e.file];
     if (content === undefined) { errors.push(`ファイル "${e.file}" がありません`); continue; }
-
     if (e.kind === "replace") {
       const i = content.indexOf(e.search);
       if (i === -1) { errors.push(`"${e.file}" に SEARCH が見つかりません`); continue; }
@@ -252,8 +227,7 @@ function pushLog(role, content) {
   div.className = role === "user" ? "text-right" : "";
   const span = document.createElement("span");
   span.className = `inline-block px-2 py-1 rounded whitespace-pre-wrap ${
-    role === "user" ? "bg-blue-600 text-white" : "bg-neutral-800"
-  }`;
+    role === "user" ? "bg-blue-600 text-white" : "bg-neutral-800"}`;
   span.textContent = content;
   div.appendChild(span);
   chatLogEl.appendChild(div);
@@ -267,8 +241,7 @@ function renderFileList() {
     const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.className = `w-full text-left px-2 py-1 rounded ${
-      f === selected ? "bg-blue-600 text-white" : "hover:bg-neutral-800"
-    }`;
+      f === selected ? "bg-blue-600 text-white" : "hover:bg-neutral-800"}`;
     btn.textContent = f;
     btn.onclick = () => selectFile(f);
     li.appendChild(btn);
@@ -280,8 +253,7 @@ function selectFile(f) {
   if (editor) currentFS[selected] = editor.getValue();
   selected = f;
   if (editor) {
-    const lang = f.endsWith(".html") ? "html"
-      : f.endsWith(".css") ? "css"
+    const lang = f.endsWith(".html") ? "html" : f.endsWith(".css") ? "css"
       : f.endsWith(".js") ? "javascript" : "plaintext";
     window.monaco.editor.setModelLanguage(editor.getModel(), lang);
     editor.setValue(currentFS[f] ?? "");
@@ -314,73 +286,49 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     });
   };
 });
-window.matchMedia("(min-width: 768px)").addEventListener("change", (e) => {
-  if (e.matches) {
-    $("leftPane").classList.remove("hidden");
-    $("editorPane").classList.remove("hidden");
-    $("previewPane").classList.remove("hidden");
-  }
-});
 
 // ── 送信 ──
 async function sendMessage() {
   if (!chatInputEl.value.trim() || busy || !engine) return;
   const msg = chatInputEl.value.trim();
   chatInputEl.value = "";
-  busy = true;
-  sendBtnEl.disabled = true;
+  busy = true; sendBtnEl.disabled = true;
   pushLog("user", msg);
-
   try {
     if (editor) currentFS[selected] = editor.getValue();
-
-    const fsDump = Object.entries(currentFS)
-      .map(([n, c]) => `--- ${n} ---\n${c}`).join("\n\n");
-
+    const fsDump = Object.entries(currentFS).map(([n, c]) => `--- ${n} ---\n${c}`).join("\n\n");
     const messages = [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: `現在のファイル:\n${fsDump}` },
       ...chatHistory,
       { role: "user", content: msg },
     ];
-
     const stream = await engine.chat.completions.create({
-      messages,
-      stream: true,
-      temperature: 0.1,
-      max_tokens: 1024,
+      messages, stream: true, temperature: 0.1, max_tokens: 1024,
     });
-
     let acc = "";
     for await (const chunk of stream) acc += chunk.choices[0]?.delta?.content || "";
-
     chatHistory.push({ role: "user", content: msg });
     chatHistory.push({ role: "assistant", content: acc });
-
     const { edits, questions, explanation } = parseAIOutput(acc);
-
     if (questions.length > 0) {
-      pushLog("assistant",
-        (explanation ? explanation + "\n\n" : "") +
+      pushLog("assistant", (explanation ? explanation + "\n\n" : "") +
         questions.map((q) => "・" + q).join("\n"));
       return;
     }
-
     if (edits.length > 0) {
       const { fs: next, errors } = applyEdits(currentFS, edits);
       currentFS = next;
       if (!currentFS[selected]) selected = Object.keys(currentFS)[0];
       renderFileList();
       if (editor) {
-        const lang = selected.endsWith(".html") ? "html"
-          : selected.endsWith(".css") ? "css"
+        const lang = selected.endsWith(".html") ? "html" : selected.endsWith(".css") ? "css"
           : selected.endsWith(".js") ? "javascript" : "plaintext";
         window.monaco.editor.setModelLanguage(editor.getModel(), lang);
         editor.setValue(currentFS[selected] ?? "");
       }
       updatePreview();
-      pushLog("assistant",
-        (explanation || "修正しました。") +
+      pushLog("assistant", (explanation || "修正しました。") +
         (errors.length ? "\n\n⚠️ " + errors.join("\n⚠️ ") : ""));
     } else {
       pushLog("assistant", explanation || "…");
@@ -388,8 +336,7 @@ async function sendMessage() {
   } catch (err) {
     pushLog("assistant", "エラー: " + String(err));
   } finally {
-    busy = false;
-    sendBtnEl.disabled = false;
+    busy = false; sendBtnEl.disabled = false;
   }
 }
 sendBtnEl.onclick = sendMessage;
@@ -412,11 +359,8 @@ zipBtnEl.onclick = async () => {
   const blob = await zip.generateAsync({ type: "blob" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = "my-project.zip";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  a.href = url; a.download = "my-project.zip";
+  document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 };
 
@@ -432,9 +376,7 @@ function preloadModel(id) {
         });
         await engine.unload();
         self.postMessage({ type: "done" });
-      } catch (err) {
-        self.postMessage({ type: "error", error: String(err) });
-      }
+      } catch (err) { self.postMessage({ type: "error", error: String(err) }); }
     };
   `;
   const blob = new Blob([code], { type: "text/javascript" });
@@ -443,34 +385,57 @@ function preloadModel(id) {
   worker.onmessage = () => worker.terminate();
 }
 
-// ── 起動 ──
+// ── 起動（段階ログ付き）──
 async function boot() {
-  const profile = await detectDeviceProfile();
-  profileEl.textContent =
-    `判定: ${profile.recommendedTier} / WebGPU: ${profile.webgpu} / iOS: ${profile.isIOS} / ${profile.reason}`;
-  progressEl.textContent = `${profile.reason} モデル読み込み中…`;
-
-  const startModel = profile.recommendedTier === "light" ? MODELS.light : MODELS.standard;
   try {
+    console.log("[1] boot start");
+    progressEl.textContent = "機種を確認中…";
+    const profile = await detectDeviceProfile();
+    console.log("[2] profile", profile);
+    profileEl.textContent =
+      `判定: ${profile.recommendedTier} / WebGPU: ${profile.webgpu} / iOS: ${profile.isIOS} / ${profile.reason}`;
+
+    progressEl.textContent = `${profile.reason} WebLLMを読み込み中…`;
+    try {
+      webllm = await import("https://esm.run/@mlc-ai/web-llm");
+      console.log("[3] webllm loaded");
+    } catch (e) {
+      progressEl.textContent = "WebLLMの読み込みに失敗: " + e.message + "（HTTPSで開いていますか？）";
+      console.error(e);
+      return;
+    }
+
+    progressEl.textContent = `${profile.reason} モデル読み込み中…`;
+    const startModel = profile.recommendedTier === "light" ? MODELS.light : MODELS.standard;
     engine = await webllm.CreateMLCEngine(startModel, {
       appConfig: { ...webllm.prebuiltAppConfig, cacheBackend: "opfs" },
       initProgressCallback: (p) => { progressEl.textContent = p.text; },
     });
     modelId = startModel;
+    console.log("[4] engine ready");
 
-    const monaco = await window.monacoReady;
-    editor = monaco.editor.create($("editor"), {
-      value: currentFS[selected],
-      language: "html",
-      theme: "vs-dark",
-      minimap: { enabled: false },
-      fontSize: 13,
-      automaticLayout: true,
-    });
-    editor.onDidChangeModelContent(() => {
-      currentFS[selected] = editor.getValue();
-      updatePreview();
-    });
+    // Monacoが準備できなくても落ちないように
+    let monaco = null;
+    try {
+      monaco = await Promise.race([
+        window.monacoReady,
+        new Promise((r) => setTimeout(() => r(null), 5000)),
+      ]);
+    } catch { monaco = null; }
+
+    if (monaco) {
+      editor = monaco.editor.create($("editor"), {
+        value: currentFS[selected], language: "html", theme: "vs-dark",
+        minimap: { enabled: false }, fontSize: 13, automaticLayout: true,
+      });
+      editor.onDidChangeModelContent(() => {
+        currentFS[selected] = editor.getValue();
+        updatePreview();
+      });
+    } else {
+      $("editorPane").innerHTML =
+        '<div class="p-4 text-sm text-red-400">エディタの読み込みに失敗しました（Monaco CDN）。</div>';
+    }
 
     loadingEl.classList.add("hidden");
     appEl.classList.remove("hidden");
@@ -479,13 +444,15 @@ async function boot() {
     renderFileList();
     updatePreview();
     pushLog("assistant", "何を作りたいか教えてください。まずは質問しながら進めます。");
+    console.log("[5] done");
 
     if (!profile.isIOS) {
       const bg = profile.recommendedTier === "heavy" ? MODELS.heavy : MODELS.standard;
       if (bg !== startModel) preloadModel(bg);
     }
   } catch (err) {
-    progressEl.textContent = "初期化に失敗: " + String(err);
+    console.error(err);
+    progressEl.textContent = "初期化に失敗: " + (err?.message || String(err));
   }
 }
 
