@@ -62,7 +62,6 @@
 </div>
 
 <script>
-  // Monaco ローダーの準備
   window.monacoReady = new Promise((resolve) => {
     require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs' } });
     require(['vs/editor/editor.main'], () => resolve(window.monaco));
@@ -74,12 +73,12 @@ import * as webllm from "https://esm.run/@mlc-ai/web-llm";
 
 // ── モデル定義 ──
 const MODELS = {
-  light:    "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",        // ~266MB
-  standard: "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC",  // ~1GB
-  heavy:    "Phi-3.5-mini-instruct-q4f16_1-MLC",        // ~2.3GB
+  light:    "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+  standard: "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC",
+  heavy:    "Phi-3.5-mini-instruct-q4f16_1-MLC",
 };
 
-// ── システムプロンプト ──
+// ── システムプロンプト（< を使わないマーカー）──
 const SYSTEM_PROMPT = `あなたはコード編集アシスタントです。以下の形式だけを使います。
 
 # ルール1: まず質問する
@@ -90,35 +89,35 @@ const SYSTEM_PROMPT = `あなたはコード編集アシスタントです。以
 
 # ルール2: 部分編集のみ（全体を書き直さない）
 既存行の置き換え:
-[EDIT:ファイル名]
-<<<SEARCH>>>
+@@EDIT:ファイル名@@
+###SEARCH###
 既存と完全一致する変更前のコード
-<<<REPLACE>>>
+###REPLACE###
 変更後のコード
-<<<END>>>
+###END###
 
 既存行の直後に追加:
-[ADD:ファイル名]
-<<<AFTER>>>
+@@ADD:ファイル名@@
+###AFTER###
 挿入位置の直前の既存コード
-<<<CONTENT>>>
+###CONTENT###
 追加するコード
-<<<END>>>
+###END###
 
 新規ファイル作成:
-[CREATE:ファイル名]
-<<<CONTENT>>>
+@@CREATE:ファイル名@@
+###CONTENT###
 ファイル内容
-<<<END>>>
+###END###
 
 # ルール3
 - マーカー外にコードを書かない
 - 説明文は日本語で短く
 - SEARCH / AFTER は既存コードから一字一句コピーする
 - 既存ファイルは index.html, style.css, script.js の3つ。index.html から
-  <link rel="stylesheet" href="style.css"> と <script src="script.js"></script> で参照する
-- 新しいファイルを作る場合は index.html からの参照も[EDIT]で追加する
-- エラー修正時は原因を1行述べてから[EDIT]を出す`;
+  link rel=stylesheet href=style.css と script src=script.js で参照する
+- 新しいファイルを作る場合は index.html からの参照も@@EDIT@@で追加する
+- エラー修正時は原因を1行述べてから@@EDIT@@を出す`;
 
 // ── 状態 ──
 let engine = null;
@@ -179,7 +178,7 @@ async function detectDeviceProfile() {
     recommendedTier: "standard", reason: "標準的なGPUバッファです。" };
 }
 
-// ── 出力パーサー ──
+// ── 出力パーサー（新マーカー）──
 function parseAIOutput(text) {
   const edits = [];
   const questions = [];
@@ -188,26 +187,26 @@ function parseAIOutput(text) {
   const qRe = /\[QUESTION\]\s*([\s\S]*?)\s*\[\/QUESTION\]/g;
   while ((m = qRe.exec(text))) questions.push(m[1].trim());
 
-  const eRe = /\[EDIT:([^\]]+)\]\s*<<<SEARCH>>>\s*([\s\S]*?)\s*<<<REPLACE>>>\s*([\s\S]*?)\s*<<<END>>>/g;
+  const eRe = /@@EDIT:([^@]+)@@\s*###SEARCH###\s*([\s\S]*?)\s*###REPLACE###\s*([\s\S]*?)\s*###END###/g;
   while ((m = eRe.exec(text))) {
     edits.push({ kind: "replace", file: m[1].trim(), search: m[2].trim(), replace: m[3].trim() });
   }
 
-  const aRe = /\[ADD:([^\]]+)\]\s*<<<AFTER>>>\s*([\s\S]*?)\s*<<<CONTENT>>>\s*([\s\S]*?)\s*<<<END>>>/g;
+  const aRe = /@@ADD:([^@]+)@@\s*###AFTER###\s*([\s\S]*?)\s*###CONTENT###\s*([\s\S]*?)\s*###END###/g;
   while ((m = aRe.exec(text))) {
     edits.push({ kind: "add", file: m[1].trim(), after: m[2].trim(), content: m[3].trim() });
   }
 
-  const cRe = /\[CREATE:([^\]]+)\]\s*<<<CONTENT>>>\s*([\s\S]*?)\s*<<<END>>>/g;
+  const cRe = /@@CREATE:([^@]+)@@\s*###CONTENT###\s*([\s\S]*?)\s*###END###/g;
   while ((m = cRe.exec(text))) {
     edits.push({ kind: "create", file: m[1].trim(), content: m[2].trim() });
   }
 
   const explanation = text
     .replace(/\[QUESTION\][\s\S]*?\[\/QUESTION\]/g, "")
-    .replace(/\[EDIT:[^\]]+\][\s\S]*?<<<END>>>/g, "")
-    .replace(/\[ADD:[^\]]+\][\s\S]*?<<<END>>>/g, "")
-    .replace(/\[CREATE:[^\]]+\][\s\S]*?<<<END>>>/g, "")
+    .replace(/@@EDIT:[^@]+@@[\s\S]*?###END###/g, "")
+    .replace(/@@ADD:[^@]+@@[\s\S]*?###END###/g, "")
+    .replace(/@@CREATE:[^@]+@@[\s\S]*?###END###/g, "")
     .trim();
 
   return { edits, questions, explanation };
